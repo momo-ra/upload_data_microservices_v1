@@ -1,0 +1,48 @@
+backend/
+├── models/                  # Django models for PostgreSQL & TimescaleDB
+│   ├── equipment.py
+│   ├── sensors.py
+│   ├── projects.py
+│   ├── __init__.py
+│
+├── queries/                 # Queries for fetching and analyzing data
+│   ├── sensor_queries.py
+│   ├── project_queries.py
+│   ├── __init__.py
+│
+├── middlewares/             # Custom middlewares for request validation, logging
+│   ├── request_logging.py
+│   ├── authentication.py
+│   ├── __init__.py
+│
+├── utils/                   # Helper functions and common utilities
+│   ├── time_helpers.py
+│   ├── validators.py
+│   ├── __init__.py
+│
+├── services/                # Business logic and API services
+│   ├── sensor_service.py
+│   ├── knowledge_graph_service.py
+│   ├── project_service.py
+│   ├── __init__.py
+│
+├── config/                  # Configuration and settings
+│   ├── settings.py
+│   ├── database.py
+│   ├── __init__.py
+│
+├── api/                     # API views and serializers
+│   ├── sensor_views.py
+│   ├── project_views.py
+│   ├── knowledge_graph_views.py
+│   ├── __init__.py
+│
+├── tests/                   # Unit tests and integration tests
+│   ├── test_sensors.py
+│   ├── test_projects.py
+│   ├── __init__.py
+│
+├── Dockerfile               # Dockerfile for containerization
+├── requirements.txt         # Python dependencies
+├── manage.py                # Django management commands
+└── wsgi.py                  # WSGI entry point for deployment

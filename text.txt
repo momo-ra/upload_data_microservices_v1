@@ -1,0 +1,29 @@
+REDIS_HOST=localhost
+REDIS_PORT=6379
+DB_NAME=timescaledb
+DB_USER=admin
+DB_PASSWORD=password
+DB_HOST=localhost
+DB_PORT=5432
+MQTT_BROKER=localhost
+MQTT_PORT=1883
+KAFKA_BROKER=localhost:9092
+KAFKA_TOPICS=["sensor/data", "equipment/status", "commands/control"]
+OPCUA_SERVER_URL="opc.tcp://localhost:4840"
+OPCUA_NODES=["ns=2;s=Temperature", "ns=2;s=Pressure"]
+ALERT_THRESHOLD=100.0
+SMTP_SERVER=smtp.example.com
+SMTP_PORT=587
+EMAIL_SENDER=alert@example.com
+EMAIL_PASSWORD=yourpassword
+EMAIL_RECIPIENT=operator@example.com
+REDIS_BATCH_SIZE=50
+
+
+
+انا عايز نستخدم check_hypertable.py
+و  table_frequency 
+في المشروع عشان لو user 
+حب ان هو يرفع ملفات في الداتا بيز ب frequncey مختلفه في time
+اعمل hybertable automaticaly عشان يسهل عملية استرجاع البيانات
+وخد بالك انا مش عايز اعمل جدوال جديد انا عايز بس اني اعمل hypertable في time_series table
