@@ -12,6 +12,8 @@ class Tag(Base):
     name = Column(String, unique=True, nullable=False)
     description = Column(String, nullable=True)
     unit_of_measure = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
 class TimeSeries(Base):
     __tablename__ = "time_series"
@@ -27,14 +29,6 @@ class TimeSeries(Base):
         Index('idx_time_series_tag_time', 'tag_id', 'timestamp', unique=True),
         Index('idx_time_series_frequency', 'frequency', 'timestamp'),
     )
-
-class Alerts(Base):
-    __tablename__ = "alerts"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    tag_id = Column(Integer, ForeignKey("tag.id"), nullable=False)
-    timestamp = Column(DateTime, nullable=False)
-    message = Column(String, nullable=False)
-
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
 # Create tables and log the process

@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
 from core.config import settings
+from models.models import Base
 
 if "DATABASE_URL" in settings.DB_CONFIG:
     DATABASE_URL = settings.DB_CONFIG["DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://")
@@ -19,7 +20,6 @@ AsyncSessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-Base = declarative_base()
 
 async def init_db():
     try:

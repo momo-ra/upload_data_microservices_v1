@@ -3,6 +3,7 @@ from utils.log import setup_logger
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from database import AsyncSessionLocal
+from datetime import datetime
 
 logger = setup_logger(__name__)
 
@@ -21,14 +22,15 @@ async def bulk_get_or_create_tags(tag_data, session):
 
     tag_mapping = {tag[1]: tag[0] for tag in existing_tags} if existing_tags else {}
 
+    current_time = datetime.now()
     missing_tags = [
-        (name, tag_data[name].get("description"), tag_data[name].get("unit_of_measure"))
+        (name, tag_data[name].get("description"), tag_data[name].get("unit_of_measure"), current_time, current_time)
         for name in tag_data.keys() if name not in tag_mapping
     ]
 
     if missing_tags:
         insert_query = """
-            INSERT INTO tag (name, description, unit_of_measure)
+            INSERT INTO tag (name, description, unit_of_measure, created_at, updated_at)
             VALUES %s
             ON CONFLICT (name) DO NOTHING
             RETURNING id, name

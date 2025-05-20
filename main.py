@@ -19,6 +19,7 @@ logger = setup_logger(__name__)
 @app.on_event("startup")
 async def startup_db_client():
     try:
+        await init_db()
         await initialize_timescaledb()
         await verify_hypertable()
     except Exception as e:
