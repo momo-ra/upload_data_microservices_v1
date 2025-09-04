@@ -1,7 +1,7 @@
 import pandas as pd
 from queries.tag_queries import bulk_get_or_create_tags
 from queries.time_series_queries import bulk_insert_time_series_data
-from database import AsyncSessionLocal
+from database import get_plant_db
 from utils.log import setup_logger
 from utils.table_frequency import determine_frequency
 from utils.check_hypertable import convert_to_hypertable
@@ -10,7 +10,7 @@ from services.job_client import JobsClient
 from services.date_retrieval import convert_timestamp_format
 from core.config import settings
 from sqlalchemy.sql import text
-from utils.db_init import verify_hypertable
+from utils.db_init import verify_hypertable, ensure_time_series_constraints
 
 logger = setup_logger(__name__)
 
@@ -18,10 +18,10 @@ class DataImportService:
     def __init__(self):
         self.jobs_client = JobsClient(settings.JOBS_SERVICE_URL)
 
-    async def _check_for_duplicates(self, df_clean, timestamp_columns, tag_names, frequency):
+    async def _check_for_duplicates(self, df_clean, timestamp_columns, tag_names, frequency, plant_id: str):
         """Check for duplicate data"""
         try:
-            async with AsyncSessionLocal() as session:
+            async for session in get_plant_db(plant_id):
                 duplicates = []
                 # Check for duplicates with different frequencies
                 for tag_name in tag_names:
@@ -29,7 +29,7 @@ class DataImportService:
                         text("""
                         SELECT DISTINCT frequency 
                         FROM time_series ts
-                        JOIN tag t ON ts.tag_id = t.id
+                        JOIN tags t ON ts.tag_id = t.id
                         WHERE t.name = :tag_name
                         AND ts.timestamp BETWEEN :start_date AND :end_date
                         """),
@@ -53,9 +53,12 @@ class DataImportService:
             logger.error(f"Error checking duplicates: {e}")
             raise
 
-    async def process_file(self, file_path: str, file_type: str = "xlsx"):
+    async def process_file(self, file_path: str, file_type: str = "xlsx", plant_id: str = None):
         """Process the file with duplicate checking"""
-        logger.info(f"📌 Processing {file_type} file: {file_path}")
+        if not plant_id:
+            raise ValueError("Plant ID is required for data processing")
+            
+        logger.info(f"📌 Processing {file_type} file: {file_path} for Plant {plant_id}")
         try:
             # Read the file
             if file_type in ["xlsx", "xls"]:
@@ -119,7 +122,7 @@ class DataImportService:
             tag_names = [col for col in df_clean.columns if col != valid_timestamp_column]
 
             # Check for duplicates
-            duplicates = await self._check_for_duplicates(df_clean, valid_timestamp_column, tag_names, frequency)
+            duplicates = await self._check_for_duplicates(df_clean, valid_timestamp_column, tag_names, frequency, plant_id)
             
             if duplicates:
                 # If duplicates found, send the file to jobs service
@@ -128,7 +131,8 @@ class DataImportService:
                     original_filename=file_path.split('/')[-1],
                     metadata={
                         "frequency": frequency,
-                        "duplicates": duplicates
+                        "duplicates": duplicates,
+                        "plant_id": plant_id
                     }
                 )
                 return {
@@ -139,7 +143,7 @@ class DataImportService:
                 }
 
             # If no duplicates, continue processing
-            return await self._process_data(df_clean, valid_timestamp_column, tag_names, frequency, description, unit_of_measure)
+            return await self._process_data(df_clean, valid_timestamp_column, tag_names, frequency, description, unit_of_measure, plant_id)
 
         except ValueError as e:
             logger.error(f"❌ Value error processing file: {str(e)}", exc_info=True)
@@ -151,7 +155,7 @@ class DataImportService:
             logger.error(f"❌ Unexpected error processing file: {str(e)}", exc_info=True)
             return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
-    async def _process_data(self, df_clean, timestamp_columns, tag_names, frequency, description, unit_of_measure):
+    async def _process_data(self, df_clean, timestamp_columns, tag_names, frequency, description, unit_of_measure, plant_id: str):
         """Process the data with improved error handling"""
         tag_data = {
         tag: {
@@ -160,7 +164,7 @@ class DataImportService:
         } for tag in tag_names
         }
 
-        async with AsyncSessionLocal() as session:
+        async for session in get_plant_db(plant_id):
             try:
                 async with session.begin():
                     # Validate data types before proceeding
@@ -170,18 +174,46 @@ class DataImportService:
                         logger.warning(f"⚠️ Found {len(bad_rows)} rows with invalid timestamps. Dropping them.")
                         df_clean = df_clean.dropna(subset=[timestamp_columns])
                     
-                    tag_mapping = await bulk_get_or_create_tags(tag_data, session)
+                    tag_mapping = await bulk_get_or_create_tags(tag_data, session, int(plant_id))
                     chunk_interval = await get_chunk_interval(frequency)
                     
-                    # Ensure time_series is a hypertable
-                    is_hypertable = await verify_hypertable()
-                    if not is_hypertable:
-                        await session.execute(text("""
-                            SELECT create_hypertable('time_series', 'timestamp', 
-                                if_not_exists => TRUE,
-                                migrate_data => TRUE,
-                                create_default_indexes => FALSE)
-                        """))
+                    # Ensure time_series is a hypertable (only if TimescaleDB is available)
+                    # Wrap in try-catch to prevent transaction abort
+                    try:
+                        is_hypertable = await verify_hypertable(plant_id)
+                        if not is_hypertable:
+                            # Check if TimescaleDB is available before trying to create hypertable
+                            result = await session.execute(text("""
+                                SELECT EXISTS (
+                                    SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'
+                                );
+                            """))
+                            timescaledb_available = result.scalar()
+                            
+                            if timescaledb_available:
+                                await session.execute(text("""
+                                    SELECT create_hypertable('time_series', 'timestamp', 
+                                        if_not_exists => TRUE,
+                                        migrate_data => TRUE,
+                                        create_default_indexes => FALSE)
+                                """))
+                                logger.info("✅ Created hypertable for time_series")
+                            else:
+                                logger.info("ℹ️ TimescaleDB not available. Continuing with regular table.")
+                    
+                        # Ensure constraints are properly set after hypertable conversion
+                        await ensure_time_series_constraints(plant_id)
+                        
+                    except Exception as e:
+                        logger.warning(f"⚠️ TimescaleDB not available or hypertable creation failed: {e}")
+                        logger.info("ℹ️ Continuing without TimescaleDB optimization")
+                    
+                    # Try to optimize the hypertable if TimescaleDB is available
+                    try:
+                        await self.optimize_hypertable(session)
+                    except Exception as e:
+                        logger.warning(f"⚠️ TimescaleDB optimization failed: {e}")
+                        logger.info("ℹ️ Continuing without TimescaleDB optimization")
                     
                     # Fixed version: Properly handle Series objects
                     time_series_data = []
@@ -197,7 +229,9 @@ class DataImportService:
                                     value = value.dropna().iloc[0] if not value.dropna().empty else None
                                 
                                 if pd.notna(value):  # This correctly checks both scalar and Series
-                                    time_series_data.append((tag_mapping[tag_name], timestamp_value, value, frequency))
+                                    # Convert value to string to match database schema
+                                    value_str = str(value) if value is not None else ''
+                                    time_series_data.append((tag_mapping[tag_name], timestamp_value, value_str, frequency))
                     
                     if not time_series_data:
                         logger.warning("⚠️ No valid time series data to insert!")
@@ -220,7 +254,15 @@ class DataImportService:
                 logger.error(f"❌ Error processing data: {str(e)}", exc_info=True)
                 raise
 
-    async def handle_duplicate_decision(self, job_id: str, decision: str):
+    async def get_processing_status(self, job_id: str, plant_id: str = None):
+        """Get the processing status of a job"""
+        try:
+            return await self.jobs_client.get_job_status(job_id)
+        except Exception as e:
+            logger.error(f"Error getting job status: {e}")
+            raise
+
+    async def handle_duplicates(self, job_id: str, decision: str, frequency: str = None, plant_id: str = None):
         """Handle user decision regarding duplicate data"""
         try:
             # Get job details
@@ -239,9 +281,38 @@ class DataImportService:
             logger.error(f"Error handling duplicate decision: {e}")
             raise
 
+    async def handle_duplicate_decision(self, job_id: str, decision: str):
+        """Handle user decision regarding duplicate data (backward compatibility)"""
+        return await self.handle_duplicates(job_id, decision)
+
     async def optimize_hypertable(self, session):
         """Apply TimescaleDB optimization settings."""
         try:
+            # First check if TimescaleDB is available
+            result = await session.execute(text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'
+                );
+            """))
+            timescaledb_available = result.scalar()
+            
+            if not timescaledb_available:
+                logger.info("ℹ️ TimescaleDB not available. Skipping optimization.")
+                return
+            
+            # Check if timescaledb_information schema exists
+            result = await session.execute(text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.schemata 
+                    WHERE schema_name = 'timescaledb_information'
+                );
+            """))
+            schema_exists = result.scalar()
+            
+            if not schema_exists:
+                logger.info("ℹ️ TimescaleDB information schema not available. Skipping optimization.")
+                return
+            
             # Set chunk time interval based on data frequency
             await session.execute(text("""
                 SELECT set_chunk_time_interval('time_series', INTERVAL '1 week');
@@ -283,5 +354,6 @@ class DataImportService:
             
             logger.info("✅ TimescaleDB optimizations applied successfully")
         except Exception as e:
-            logger.error(f"❌ Error applying TimescaleDB optimizations: {e}")
-            raise
+            logger.warning(f"⚠️ TimescaleDB optimization failed: {e}")
+            # Don't raise the exception, just log it and continue
+            pass

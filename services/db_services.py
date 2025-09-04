@@ -1,7 +1,6 @@
 import psycopg2
 from utils.log import setup_logger
 from core.config import settings
-from database import AsyncSessionLocal
 from sqlalchemy import text
 import time
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +11,11 @@ logger = setup_logger(__name__)
 
 
 def get_db_connection(retries=3, delay=2):
+    """Get database connection - this function needs to be updated to work with plant-specific connections"""
+    logger.warning("⚠️ get_db_connection function needs to be updated for multi-database architecture")
     for attempt in range(retries):
         try:
+            # This needs to be updated to work with plant-specific database connections
             conn = psycopg2.connect(**settings.DB_CONFIG)
             logger.info("✅ Successfully connected to TimescaleDB via psycopg2!")
             return conn
@@ -29,10 +31,8 @@ def get_db_connection(retries=3, delay=2):
 async def fetch_all(query: str, params: dict = None, session: AsyncSession = None) -> list:
     """Fetch existing time-series data efficiently."""
     
-    close_session = False
     if session is None:
-        session = AsyncSessionLocal()
-        close_session = True  # ✅ سيتم إغلاق الجلسة إذا تم إنشاؤها داخل الدالة
+        raise ValueError("Session is required for database operations in multi-database architecture")
 
     try:
         if params and isinstance(params, list):
@@ -59,9 +59,6 @@ async def fetch_all(query: str, params: dict = None, session: AsyncSession = Non
     except Exception as e:
         logger.error(f"❌ Fetch error: {e}")
         return []
-    finally:
-        if close_session:
-            await session.close()  # ✅ إغلاق الجلسة فقط إذا تم إنشاؤها داخل الدالة
 
 async def execute_batch_values(query: str, values: list, session: AsyncSession) -> list:
     """Execute batch insert using TimescaleDB's optimized methods."""
@@ -75,8 +72,8 @@ async def execute_batch_values(query: str, values: list, session: AsyncSession) 
         asyncpg_conn = raw_conn._connection
         
         # Use more efficient batch processing
-        if "INSERT INTO tag" in query:
-            # For tag table, use simple batch insert
+        if "INSERT INTO tags" in query:
+            # For tags table, use simple batch insert
             num_columns = len(values[0])
             placeholders = ", ".join(f"${i+1}" for i in range(num_columns))
             query = query.replace("VALUES %s", f"VALUES ({placeholders})")

@@ -1,5 +1,5 @@
 from sqlalchemy import text
-from database import AsyncSessionLocal
+from database import get_plant_db
 from utils.log import setup_logger
 from datetime import datetime
 
@@ -25,9 +25,9 @@ def convert_timestamp_format(timestamp: str):
     raise ValueError(f"❌ Unsupported timestamp format: {timestamp}")
 
 ### 📌 1️⃣ List All Tables
-async def list_tables():
+async def list_tables(plant_id: str):
     """Retrieve all available tables."""
-    async with AsyncSessionLocal() as session:
+    async for session in get_plant_db(plant_id):
         try:
             result = await session.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'"))
             return [row[0] for row in result]
@@ -36,9 +36,9 @@ async def list_tables():
             raise
 
 ### 📌 2️⃣ Get Table Columns & Data Types
-async def get_table_columns(table_name: str):
+async def get_table_columns(table_name: str, plant_id: str):
     """Retrieve column names and data types."""
-    async with AsyncSessionLocal() as session:
+    async for session in get_plant_db(plant_id):
         try:
             result = await session.execute(text("""
                 SELECT column_name, data_type 
@@ -51,9 +51,9 @@ async def get_table_columns(table_name: str):
             raise
 
 ### 📌 3️⃣ Retrieve Table Data with Filtering
-async def get_table_data(table_name: str, start_time: str = None, end_time: str = None, limit: int = 100):
+async def get_table_data(table_name: str, plant_id: str, start_time: str = None, end_time: str = None, limit: int = 100):
     """Fetch data from a table with optional time filtering."""
-    async with AsyncSessionLocal() as session:
+    async for session in get_plant_db(plant_id):
         try:
             query = f"SELECT * FROM {table_name}"
             conditions = []
@@ -84,9 +84,9 @@ async def get_table_data(table_name: str, start_time: str = None, end_time: str 
             raise
 
 ### 📌 4️⃣ Delete All Data from a Table
-async def delete_table_data(table_name: str):
+async def delete_table_data(table_name: str, plant_id: str):
     """Delete all records from a table."""
-    async with AsyncSessionLocal() as session:
+    async for session in get_plant_db(plant_id):
         try:
             async with session.begin():
                 await session.execute(text(f"DELETE FROM {table_name}"))
@@ -96,9 +96,9 @@ async def delete_table_data(table_name: str):
             raise
 
 ### 📌 5️⃣ Update a Specific Record in a Table
-async def update_record(table_name: str, record_id: int, update_data: dict):
+async def update_record(table_name: str, record_id: int, update_data: dict, plant_id: str):
     """Update a record in a table."""
-    async with AsyncSessionLocal() as session:
+    async for session in get_plant_db(plant_id):
         try:
             async with session.begin():
                 set_clause = ", ".join([f"{key} = :{key}" for key in update_data.keys()])
