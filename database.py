@@ -32,7 +32,7 @@ async def get_plant_engine(plant_id: str) -> Tuple:
         # Get plant database connection info from central database
         async with CentralSessionLocal() as session:
             query = text("""
-                SELECT database_key, connection_key, name 
+                SELECT database_key, database_key, name 
                 FROM plants_registry 
                 WHERE id = :plant_id AND is_active = true
             """)
@@ -43,13 +43,13 @@ async def get_plant_engine(plant_id: str) -> Tuple:
             if not plant_info:
                 raise HTTPException(status_code=404, detail=f"Plant {plant_id} not found or inactive")
             
-            # database_key = plant_info.database_key
-            connection_key = plant_info.connection_key
+            database_key = plant_info.database_key
+            database_key = plant_info.database_key
             plant_name = plant_info.name
             
-            # Get database URL using the settings method with database_key
+            # Get database URL using the settings method
             try:
-                db_url = settings.get_plant_database_url(connection_key)
+                db_url = settings.get_plant_database_url(database_key)
             except ValueError as e:
                 raise HTTPException(status_code=500, detail=str(e))
             
@@ -283,7 +283,7 @@ async def get_active_plants() -> list:
     try:
         async with CentralSessionLocal() as session:
             query = text("""
-                SELECT id, name, connection_key, database_key 
+                SELECT id, name, database_key, database_key 
                 FROM plants_registry 
                 WHERE is_active = true 
                 ORDER BY name
@@ -293,7 +293,7 @@ async def get_active_plants() -> list:
                 {
                     "id": row.id,
                     "name": row.name,
-                    "connection_key": row.connection_key,
+                    "database_key": row.database_key,
                     "database_key": row.database_key
                 }
                 for row in result.fetchall()
@@ -321,7 +321,7 @@ async def validate_plant_access(user_id: int, plant_id: str) -> bool:
             result = await session.execute(query, {"user_id": user_id, "plant_id": int(plant_id)})
             return bool(result.scalar())
     except Exception as e:
-        logger.error(f"Error validating plant access for user {user_id}, plant {plant_id}: {e}")
+        logger.error(f"Error validating plant access for user {user_id}, plant {plawnt_id}: {e}")
         return False
 
 # =============================================================================
