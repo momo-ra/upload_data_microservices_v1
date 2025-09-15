@@ -79,7 +79,7 @@ app.add_middleware(
 async def startup_db_client():
     try:
         await init_db()
-        logger.success("Database initialization completed successfully")
+        logger.success("Database initialization completed successfully.")
     except Exception as e:
         logger.error(f"Database initialization failed: {str(e)}")
         # Continue anyway, don't crash the application
@@ -89,3 +89,5 @@ app.include_router(file_upload_router, prefix="/api/v1")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
