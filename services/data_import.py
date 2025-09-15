@@ -4,6 +4,7 @@ from queries.time_series_queries import bulk_insert_time_series_data
 from database import get_plant_db
 from utils.log import setup_logger
 from utils.table_frequency import determine_frequency
+from utils.response import success_response, fail_response
 from utils.check_hypertable import convert_to_hypertable
 from utils.chunk_interval import get_chunk_interval
 from services.job_client import JobsClient
@@ -25,38 +26,44 @@ class DataImportService:
                 duplicates = []
                 # Check for duplicates with different frequencies
                 for tag_name in tag_names:
-                    existing_data = await session.execute(
-                        text("""
-                        SELECT DISTINCT frequency 
-                        FROM time_series ts
-                        JOIN tags t ON ts.tag_id = t.id
-                        WHERE t.name = :tag_name
-                        AND ts.timestamp BETWEEN :start_date AND :end_date
-                        """),
-                        {
-                            "tag_name": tag_name,
-                            "start_date": df_clean[timestamp_columns].min(),
-                            "end_date": df_clean[timestamp_columns].max()
-                        }
-                    )
-                    existing_frequencies = existing_data.fetchall()
-                    
-                    if existing_frequencies and frequency not in [f[0] for f in existing_frequencies]:
-                        duplicates.append({
-                            "tag_name": tag_name,
-                            "existing_frequency": existing_frequencies[0][0],
-                            "new_frequency": frequency
-                        })
+                    try:
+                        existing_data = await session.execute(
+                            text("""
+                            SELECT DISTINCT frequency 
+                            FROM time_series ts
+                            JOIN tags t ON ts.tag_id = t.id
+                            WHERE t.name = :tag_name
+                            AND ts.timestamp BETWEEN :start_date AND :end_date
+                            """),
+                            {
+                                "tag_name": tag_name,
+                                "start_date": df_clean[timestamp_columns].min(),
+                                "end_date": df_clean[timestamp_columns].max()
+                            }
+                        )
+                        existing_frequencies = existing_data.fetchall()
+                        
+                        if existing_frequencies and frequency not in [f[0] for f in existing_frequencies]:
+                            duplicates.append({
+                                "tag_name": tag_name,
+                                "existing_frequency": existing_frequencies[0][0],
+                                "new_frequency": frequency
+                            })
+                    except Exception as tag_error:
+                        logger.warning(f"Error checking duplicates for tag {tag_name}: {tag_error}")
+                        # Continue with other tags even if one fails
+                        continue
                 
                 return duplicates
         except Exception as e:
             logger.error(f"Error checking duplicates: {e}")
-            raise
+            # Return empty list instead of fail_response to avoid serialization issues
+            return []
 
     async def process_file(self, file_path: str, file_type: str = "xlsx", plant_id: str = None):
         """Process the file with duplicate checking"""
         if not plant_id:
-            raise ValueError("Plant ID is required for data processing")
+            return fail_response(message="Plant ID is required for data processing")
             
         logger.info(f"📌 Processing {file_type} file: {file_path} for Plant {plant_id}")
         try:
@@ -68,7 +75,7 @@ class DataImportService:
             elif file_type == "csv":
                 df = pd.read_csv(file_path, header=None)
             else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+                return fail_response(message=f"Unsupported file type: {file_type}")
 
             # Extract header
             header = df.iloc[0].str.lower().str.strip()
@@ -97,7 +104,7 @@ class DataImportService:
             timestamp_columns = [col for col in df_clean.columns if 'time' in col or 'timestamp' in col]
             
             if not timestamp_columns:
-                raise ValueError("No timestamp column found in the data.")
+                return fail_response(message="No timestamp column found in the data.")
 
             # Use the first valid timestamp column
             valid_timestamp_column = timestamp_columns[0]
@@ -111,7 +118,7 @@ class DataImportService:
 
             # Check for NaT values after conversion
             if df_clean[valid_timestamp_column].isna().all():
-                raise ValueError(f"All values in {valid_timestamp_column} could not be converted to datetime.")
+                return fail_response(message=f"All values in {valid_timestamp_column} could not be converted to datetime.")
 
             # Determine frequency using the actual timestamp column name
             frequency = await determine_frequency(df_clean, valid_timestamp_column)
@@ -124,36 +131,46 @@ class DataImportService:
             # Check for duplicates
             duplicates = await self._check_for_duplicates(df_clean, valid_timestamp_column, tag_names, frequency, plant_id)
             
-            if duplicates:
+            # Ensure duplicates is a list (not a dict from fail_response)
+            if isinstance(duplicates, dict) and duplicates.get("status") == "fail":
+                logger.warning("Duplicate checking failed, proceeding with data processing")
+                duplicates = []
+            
+            if duplicates and len(duplicates) > 0:
                 # If duplicates found, send the file to jobs service
-                job_id = await self.jobs_client.create_job(
-                    file_path=file_path,
-                    original_filename=file_path.split('/')[-1],
-                    metadata={
-                        "frequency": frequency,
+                try:
+                    job_id = await self.jobs_client.create_job(
+                        file_path=file_path,
+                        original_filename=file_path.split('/')[-1],
+                        metadata={
+                            "frequency": frequency,
+                            "duplicates": duplicates,
+                            "plant_id": plant_id
+                        }
+                    )
+                    return {
+                        "status": "duplicate_found",
+                        "job_id": job_id,
                         "duplicates": duplicates,
-                        "plant_id": plant_id
+                        "message": "Found duplicate data with different frequencies"
                     }
-                )
-                return {
-                    "status": "duplicate_found",
-                    "job_id": job_id,
-                    "duplicates": duplicates,
-                    "message": "Found duplicate data with different frequencies"
-                }
+                except Exception as job_error:
+                    logger.error(f"Error creating job for duplicates: {job_error}")
+                    # Continue with normal processing if job creation fails
+                    logger.info("Continuing with normal data processing due to job creation failure")
 
             # If no duplicates, continue processing
             return await self._process_data(df_clean, valid_timestamp_column, tag_names, frequency, description, unit_of_measure, plant_id)
 
         except ValueError as e:
             logger.error(f"❌ Value error processing file: {str(e)}", exc_info=True)
-            return {"status": "error", "message": str(e)}
+            return fail_response(message=str(e))
         except pd.errors.ParserError as e:
             logger.error(f"❌ Error parsing file: {str(e)}", exc_info=True)
-            return {"status": "error", "message": "Invalid file format. Please check your file."}
+            return fail_response(message="Invalid file format. Please check your file.")
         except Exception as e:
             logger.error(f"❌ Unexpected error processing file: {str(e)}", exc_info=True)
-            return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+            return fail_response(message=f"Unexpected error: {str(e)}")
 
     async def _process_data(self, df_clean, timestamp_columns, tag_names, frequency, description, unit_of_measure, plant_id: str):
         """Process the data with improved error handling"""
@@ -163,6 +180,9 @@ class DataImportService:
             "unit_of_measure": unit_of_measure.get(tag)
         } for tag in tag_names
         }
+
+        logger.info(f"📊 Created tag_data for {len(tag_data)} tags")
+        logger.info(f"📊 Tag names in tag_data: {list(tag_data.keys())[:5]}...")
 
         async for session in get_plant_db(plant_id):
             try:
@@ -175,6 +195,14 @@ class DataImportService:
                         df_clean = df_clean.dropna(subset=[timestamp_columns])
                     
                     tag_mapping = await bulk_get_or_create_tags(tag_data, session, int(plant_id))
+                    logger.info(f"📊 Tag mapping created with {len(tag_mapping)} tags")
+                    logger.info(f"📊 Tag mapping keys: {list(tag_mapping.keys())[:5]}...")
+                    
+                    # Check for missing tags
+                    missing_tags = set(tag_names) - set(tag_mapping.keys())
+                    if missing_tags:
+                        logger.warning(f"⚠️ {len(missing_tags)} tags not found in mapping: {list(missing_tags)[:5]}...")
+                    
                     chunk_interval = await get_chunk_interval(frequency)
                     
                     # Ensure time_series is a hypertable (only if TimescaleDB is available)
@@ -217,42 +245,76 @@ class DataImportService:
                     
                     # Fixed version: Properly handle Series objects
                     time_series_data = []
-                    for _, row in df_clean.iterrows():
+                    zero_count = 0
+                    total_count = 0
+                    nan_count = 0
+                    none_count = 0
+                    missing_tag_count = 0
+                    
+                    logger.info(f"📊 Starting data processing: {len(df_clean)} rows, {len(tag_names)} tags")
+                    logger.info(f"📊 Tag names: {tag_names[:5]}...")  # Show first 5 tag names
+                    logger.info(f"📊 Tag mapping keys: {list(tag_mapping.keys())[:5]}...")  # Show first 5 mapped tags
+                    
+                    for row_idx, row in df_clean.iterrows():
                         timestamp_value = row[timestamp_columns]
                         
                         for tag_name in tag_names:
                             if tag_name in tag_mapping:
+                                total_count += 1
                                 # Get the value and check if it's not NaN using pandas' proper method
                                 value = row[tag_name]
                                 if isinstance(value, pd.Series):
                                     # If it's a Series, take the first non-NaN value
                                     value = value.dropna().iloc[0] if not value.dropna().empty else None
                                 
-                                if pd.notna(value):  # This correctly checks both scalar and Series
+                                # Check what type of value we have
+                                if pd.isna(value):
+                                    nan_count += 1
+                                elif value is None:
+                                    none_count += 1
+                                elif pd.notna(value) or value == 0:
                                     # Convert value to string to match database schema
                                     value_str = str(value) if value is not None else ''
                                     time_series_data.append((tag_mapping[tag_name], timestamp_value, value_str, frequency))
+                                    
+                                    # Count and log zero values for debugging
+                                    if value == 0:
+                                        zero_count += 1
+                                        logger.debug(f"📊 Saving zero value for tag {tag_name} at {timestamp_value}")
+                            else:
+                                missing_tag_count += 1
+                                if missing_tag_count <= 5:  # Log first 5 missing tags
+                                    logger.warning(f"⚠️ Tag '{tag_name}' not found in tag_mapping")
+                    
+                    logger.info(f"📊 Processing summary:")
+                    logger.info(f"   - Total values processed: {total_count}")
+                    logger.info(f"   - Zero values: {zero_count}")
+                    logger.info(f"   - NaN values (filtered out): {nan_count}")
+                    logger.info(f"   - None values (filtered out): {none_count}")
+                    logger.info(f"   - Missing tags (filtered out): {missing_tag_count}")
+                    logger.info(f"   - Records prepared for insertion: {len(time_series_data)}")
+                    logger.info(f"   - Expected records: {len(df_clean) * len(tag_names)}")
                     
                     if not time_series_data:
                         logger.warning("⚠️ No valid time series data to insert!")
-                        return {
-                            "status": "warning",
-                            "message": "No valid data to process. Check your file."
-                        }
+                        return fail_response(
+                            message="No valid data to process. Check your file."
+                        )
 
                     await bulk_insert_time_series_data(time_series_data, session)
                     
-                    return {
-                        "status": "success",
-                        "message": "Data processed successfully!",
-                        "data_frequency": frequency,
-                        "records_processed": len(time_series_data)
-                    }
+                    return success_response(
+                        data={
+                            "data_frequency": frequency,
+                            "records_processed": len(time_series_data)
+                        },
+                        message="Data processed successfully!"
+                    )
 
             except Exception as e:
                 await session.rollback()
                 logger.error(f"❌ Error processing data: {str(e)}", exc_info=True)
-                raise
+                return fail_response(message=f"Error processing data: {str(e)}")
 
     async def get_processing_status(self, job_id: str, plant_id: str = None):
         """Get the processing status of a job"""
@@ -260,7 +322,7 @@ class DataImportService:
             return await self.jobs_client.get_job_status(job_id)
         except Exception as e:
             logger.error(f"Error getting job status: {e}")
-            raise
+            return fail_response(message=f"Error getting job status: {str(e)}")
 
     async def handle_duplicates(self, job_id: str, decision: str, frequency: str = None, plant_id: str = None):
         """Handle user decision regarding duplicate data"""
@@ -275,11 +337,11 @@ class DataImportService:
                 # Ignore duplicate data
                 return await self.jobs_client.make_decision(job_id, "skip")
             else:
-                raise ValueError(f"Invalid decision: {decision}")
+                return fail_response(message=f"Invalid decision: {decision}")
 
         except Exception as e:
             logger.error(f"Error handling duplicate decision: {e}")
-            raise
+            return fail_response(message=f"Error handling duplicate decision: {str(e)}")
 
     async def handle_duplicate_decision(self, job_id: str, decision: str):
         """Handle user decision regarding duplicate data (backward compatibility)"""

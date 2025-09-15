@@ -12,17 +12,35 @@ class JobsClient:
 
     async def create_job(self, file_path: str, original_filename: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """إنشاء job جديد"""
+        file_handle = None
         try:
-            files = {'file': open(file_path, 'rb')}
+            file_handle = open(file_path, 'rb')
+            files = {'file': file_handle}
             data = {}
             if metadata:
-                data['metadata'] = metadata
+                # Ensure metadata is JSON serializable
+                import json
+                try:
+                    # Test if metadata is JSON serializable
+                    json.dumps(metadata)
+                    data['metadata'] = json.dumps(metadata)  # Convert to JSON string
+                except (TypeError, ValueError) as json_error:
+                    logger.error(f"Metadata not JSON serializable: {json_error}")
+                    # Create a simplified metadata structure
+                    data['metadata'] = json.dumps({
+                        "frequency": metadata.get("frequency", "unknown"),
+                        "plant_id": metadata.get("plant_id", "unknown"),
+                        "duplicates": "found" if metadata.get("duplicates") else "none"
+                    })
             response = await self.client.post("/api/v1/jobs/upload", files=files, data=data)
             response.raise_for_status()
             return response.json()['id']
         except Exception as e:
             logger.error(f"Error creating job: {str(e)}")
             raise
+        finally:
+            if file_handle:
+                file_handle.close()
 
     async def get_job_status(self, job_id: str) -> dict:
         """الحصول على حالة الـ job"""

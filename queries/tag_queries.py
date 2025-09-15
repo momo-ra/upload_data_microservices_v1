@@ -6,6 +6,54 @@ from datetime import datetime
 
 logger = setup_logger(__name__)
 
+async def get_or_create_default_data_source(session, plant_id: int):
+    """Get or create a default data source for the plant"""
+    # First, try to get existing data source
+    existing_query = """
+        SELECT id FROM data_sources 
+        WHERE plant_id = :plant_id AND is_active = true
+        ORDER BY created_at ASC
+        LIMIT 1
+    """
+    result = await fetch_all(existing_query, {"plant_id": plant_id}, session)
+    
+    if result:
+        return result[0][0]  # Return the ID
+    
+    # If no data source exists, create a default one
+    # First, get or create a default data source type
+    type_query = """
+        SELECT id FROM data_source_types 
+        WHERE name = 'File Upload' AND is_active = true
+        LIMIT 1
+    """
+    type_result = await fetch_all(type_query, {}, session)
+    
+    if not type_result:
+        # Create default data source type
+        create_type_query = """
+            INSERT INTO data_source_types (name, description, is_active, created_at, updated_at)
+            VALUES ('File Upload', 'Data source for file uploads', true, :now, :now)
+            RETURNING id
+        """
+        type_result = await fetch_all(create_type_query, {"now": datetime.now()}, session)
+    
+    type_id = type_result[0][0]
+    
+    # Create default data source
+    create_source_query = """
+        INSERT INTO data_sources (name, description, type_id, plant_id, is_active, created_at, updated_at)
+        VALUES ('Default File Upload', 'Default data source for file uploads', :type_id, :plant_id, true, :now, :now)
+        RETURNING id
+    """
+    source_result = await fetch_all(create_source_query, {
+        "type_id": type_id,
+        "plant_id": plant_id,
+        "now": datetime.now()
+    }, session)
+    
+    return source_result[0][0]
+
 async def bulk_get_or_create_tags(tag_data, session, plant_id: int = None):
     """Insert tags into the database if they do not exist."""
     logger.info(f"📌 Bulk getting or creating tags: {len(list(tag_data.keys()))}")
@@ -13,6 +61,10 @@ async def bulk_get_or_create_tags(tag_data, session, plant_id: int = None):
     if not tag_data:
         logger.error("⚠️ No tag names provided. Skipping tag creation.")
         return {}
+
+    # Get or create default data source
+    data_source_id = await get_or_create_default_data_source(session, plant_id)
+    logger.info(f"📌 Using data source ID: {data_source_id}")
 
     existing_query = """
         SELECT id, name FROM tags WHERE name = ANY(:values)
@@ -23,13 +75,13 @@ async def bulk_get_or_create_tags(tag_data, session, plant_id: int = None):
 
     current_time = datetime.now()
     missing_tags = [
-        (name, tag_data[name].get("description"), tag_data[name].get("unit_of_measure"), plant_id, current_time, current_time)
+        (name, tag_data[name].get("description"), tag_data[name].get("unit_of_measure"), plant_id, data_source_id, current_time, current_time)
         for name in tag_data.keys() if name not in tag_mapping
     ]
 
     if missing_tags:
         insert_query = """
-            INSERT INTO tags (name, description, unit_of_measure, plant_id, created_at, updated_at)
+            INSERT INTO tags (name, description, unit_of_measure, plant_id, data_source_id, created_at, updated_at)
             VALUES %s
             ON CONFLICT (name) DO NOTHING
             RETURNING id, name

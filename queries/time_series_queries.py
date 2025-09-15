@@ -30,41 +30,15 @@ async def bulk_insert_time_series_data(time_series_data, session: AsyncSession):
             values = [str(record[2]) if record[2] is not None else '' for record in batch]
             frequencies = [record[3] for record in batch]
             
-            # First, check for existing records to avoid duplicates
-            existing_query = """
-                SELECT tag_id, timestamp FROM time_series 
-                WHERE (tag_id, timestamp) IN (
-                    SELECT unnest($1::int[]), unnest($2::timestamp[])
-                )
-            """
-            existing_records = await asyncpg_conn.fetch(existing_query, tag_ids, timestamps)
-            existing_pairs = {(row['tag_id'], row['timestamp']) for row in existing_records}
+            # Use ON CONFLICT DO NOTHING to handle duplicates gracefully
+            # This is the most reliable approach for PostgreSQL
+            await asyncpg_conn.execute("""
+                INSERT INTO time_series (tag_id, timestamp, value, frequency)
+                SELECT * FROM unnest($1::int[], $2::timestamp[], $3::text[], $4::text[])
+                ON CONFLICT (tag_id, timestamp) DO NOTHING
+            """, tag_ids, timestamps, values, frequencies)
             
-            # Filter out existing records
-            filtered_batch = []
-            filtered_tag_ids = []
-            filtered_timestamps = []
-            filtered_values = []
-            filtered_frequencies = []
-            
-            for j, (tag_id, timestamp, value, frequency) in enumerate(batch):
-                if (tag_id, timestamp) not in existing_pairs:
-                    filtered_batch.append((tag_id, timestamp, value, frequency))
-                    filtered_tag_ids.append(tag_id)
-                    filtered_timestamps.append(timestamp)
-                    filtered_values.append(value)
-                    filtered_frequencies.append(frequency)
-            
-            if filtered_batch:
-                # Use asyncpg directly with pure SQL - without ON CONFLICT clause
-                await asyncpg_conn.execute("""
-                    INSERT INTO time_series (tag_id, timestamp, value, frequency)
-                    SELECT * FROM unnest($1::int[], $2::timestamp[], $3::text[], $4::text[])
-                """, filtered_tag_ids, filtered_timestamps, filtered_values, filtered_frequencies)
-                
-                logger.info(f"✅ Batch {i//batch_size + 1}: Inserted {len(filtered_batch)} records (skipped {len(batch) - len(filtered_batch)} duplicates)")
-            else:
-                logger.info(f"ℹ️ Batch {i//batch_size + 1}: All {len(batch)} records already exist, skipping")
+            logger.info(f"✅ Batch {i//batch_size + 1}: Processed {len(batch)} records (duplicates automatically skipped)")
         
         await session.commit()
         logger.info(f"✅ TimescaleDB optimized insert complete")
