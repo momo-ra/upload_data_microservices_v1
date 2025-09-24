@@ -32,10 +32,12 @@ async def bulk_insert_time_series_data(time_series_data, session: AsyncSession):
             
             # Use ON CONFLICT DO NOTHING to handle duplicates gracefully
             # This is the most reliable approach for PostgreSQL
+            # TEMPORARY FIX: Include workspace_id until migration is applied
             await asyncpg_conn.execute("""
-                INSERT INTO time_series (tag_id, timestamp, value, frequency)
-                SELECT * FROM unnest($1::int[], $2::timestamp[], $3::text[], $4::text[])
-                ON CONFLICT (tag_id, timestamp) DO NOTHING
+                INSERT INTO time_series (tag_id, timestamp, value, frequency, workspace_id)
+                SELECT tag_id, timestamp, value, frequency, 1
+                FROM unnest($1::int[], $2::timestamp[], $3::text[], $4::text[]) AS t(tag_id, timestamp, value, frequency)
+                ON CONFLICT DO NOTHING
             """, tag_ids, timestamps, values, frequencies)
             
             logger.info(f"✅ Batch {i//batch_size + 1}: Processed {len(batch)} records (duplicates automatically skipped)")
