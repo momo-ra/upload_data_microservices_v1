@@ -49,33 +49,10 @@ app.add_middleware(CustomCORSMiddleware)
 # Add standard CORS middleware as backup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3039",
-        "http://127.0.0.1:3039",
-        "http://localhost:3000",
-        "http://172.27.26.127:3000",
-        "http://10.10.10.78:3039",  # Add your specific origins
-        "http://172.27.26.127:3039",
-        "http://172.27.88.85:8000",
-        "http://172.27.88.85:8080"
-        
-    ],
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=[
-        "Accept",
-        "Accept-Language",
-        "Content-Language",
-        "Content-Type",
-        "Authorization",
-        "plant-id",
-        "X-Requested-With",
-        "Origin",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers",
-    ],
-    expose_headers=["*"],
-    max_age=600,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # ✅ Run `init_db()` when the application starts
