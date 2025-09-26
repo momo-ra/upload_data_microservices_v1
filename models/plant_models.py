@@ -111,13 +111,12 @@ class Workspace(PlantBase, BaseModel):
     # Relationships
     members = relationship("WorkspaceMembers", back_populates="workspace", cascade="all, delete-orphan")
     cards = relationship("CardData", back_populates="workspace", cascade="all, delete-orphan")
-    # tag_subscriptions = relationship("WorkspaceTagSubscription", back_populates="workspace", cascade="all, delete-orphan")
     alerts = relationship("Alerts", back_populates="workspace", cascade="all, delete-orphan")
     alerting_formulas = relationship("AlertingFormula", back_populates="workspace", cascade="all, delete-orphan")
-    polling_tasks = relationship("PollingTasks", back_populates="workspace", cascade="all, delete-orphan")
     subscription_tasks = relationship("SubscriptionTasks", back_populates="workspace", cascade="all, delete-orphan")
     time_series = relationship("TimeSeries", back_populates="workspace", cascade="all, delete-orphan")
     alerting_data = relationship("AlertingData", back_populates="workspace", cascade="all, delete-orphan")
+    layouts = relationship("Layout", back_populates="workspace", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<Workspace(id={self.id}, name={self.name}, plant_id={self.plant_id})>"
@@ -157,11 +156,12 @@ class Tag(PlantBase, BaseModel):
     __tablename__ = "tags"
     
     name = Column(String, nullable=False, unique=True)
+    connection_string = Column(String, nullable=True)
     description = Column(String, nullable=True)
     unit_of_measure = Column(String, nullable=True)
     plant_id = Column(Integer, nullable=False)  # Plant reference for cross-database operations
     is_active = Column(Boolean, default=True)
-    data_source_id = Column(Integer, ForeignKey("data_sources.id"), nullable=False)
+    data_source_id = Column(Integer, ForeignKey("data_sources.id", ondelete="CASCADE"), nullable=False)
     
     __table_args__ = (
         Index('idx_tags_name', 'name'),
@@ -178,8 +178,7 @@ class Tag(PlantBase, BaseModel):
     polling_tasks = relationship("PollingTasks", back_populates="tag", cascade="all, delete-orphan")
     alerting_formulas_tag1 = relationship("AlertingFormula", foreign_keys="AlertingFormula.tag_1", back_populates="tag_1_ref")
     alerting_formulas_tag2 = relationship("AlertingFormula", foreign_keys="AlertingFormula.tag_2", back_populates="tag_2_ref")
-    # workspace_subscriptions = relationship("WorkspaceTagSubscription", back_populates="tag", cascade="all, delete-orphan")
-    # data_source = relationship("DataSource", back_populates="tags")
+    data_source = relationship("DataSource", back_populates="tags")
     
     def __repr__(self):
         return f"<Tag(id={self.id}, name={self.name}, plant_id={self.plant_id})>"
@@ -232,19 +231,14 @@ class ChatSession(PlantBase, BaseModel):
     session_id = Column(String, unique=True, nullable=False)
     user_id = Column(Integer, nullable=False)  # References users.id from central DB (no FK constraint)
     user_name = Column(String, nullable=True)  # Cache for display
-    chat_name = Column(String(255), nullable=True)  # User-defined chat name
-    is_starred = Column(Boolean, default=False)  # Starred status for favorites
     
     __table_args__ = (
         Index('idx_chat_sessions_user_id', 'user_id'),
         Index('idx_chat_sessions_session_id', 'session_id'),
-        Index('idx_chat_sessions_is_starred', 'is_starred'),
-        Index('idx_chat_sessions_updated_at', 'updated_at'),
     )
     
     # Relationships
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
-    artifacts = relationship("Artifacts", back_populates="session", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<ChatSession(id={self.id}, session_id={self.session_id}, user_id={self.user_id})>"
@@ -274,32 +268,6 @@ class ChatMessage(PlantBase, BaseModel):
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, session_id={self.session_id})>"
 
-class Artifacts(PlantBase, BaseModel):
-    """Artifacts - Plant Database, Plant-wide"""
-    __tablename__ = "artifacts"
-    
-    session_id = Column(String, ForeignKey('chat_sessions.session_id'), nullable=False)
-    user_id = Column(Integer, nullable=False)  # References users.id from central DB (no FK constraint)
-    title = Column(String(255), nullable=False)  # Artifact title/name for easy identification
-    artifact_type = Column(String(50), nullable=False, default='general')  # Type of artifact (code, diagram, data, etc.)
-    content = Column(Text, nullable=False)  # The actual artifact content
-    artifact_metadata = Column(JSON, nullable=True)  # Additional metadata (format, size, etc.)
-    is_active = Column(Boolean, default=True)  # Soft delete functionality
-    message_id = Column(Integer, nullable=True)  # Reference to the chat message that generated this artifact
-    
-    __table_args__ = (
-        Index('idx_artifacts_session_id', 'session_id'),
-        Index('idx_artifacts_user_id', 'user_id'),
-        Index('idx_artifacts_artifact_type', 'artifact_type'),
-        Index('idx_artifacts_is_active', 'is_active'),
-        Index('idx_artifacts_message_id', 'message_id'),
-    )
-    
-    # Relationships
-    session = relationship("ChatSession", back_populates="artifacts")
-    
-    def __repr__(self):
-        return f"<Artifacts(id={self.id}, session_id={self.session_id}, title={self.title})>"
 # =============================================================================
 # WORKSPACE-SCOPED OPERATIONAL DATA
 # =============================================================================
@@ -447,10 +415,9 @@ class AlertingData(PlantBase, BaseModel):
         return f"<AlertingData(id={self.id}, workspace_id={self.workspace_id}, formula_id={self.formula_id})>"
 
 class PollingTasks(PlantBase, BaseModel):
-    """Polling Tasks - Plant Database, Workspace-Scoped"""
+    """Polling Tasks - Plant Database, Plant-wide"""
     __tablename__ = "polling_tasks"
     
-    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=False)
     tag_id = Column(Integer, ForeignKey("tags.id"), nullable=False)
     time_interval = Column(Integer, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -458,19 +425,17 @@ class PollingTasks(PlantBase, BaseModel):
     next_polled = Column(DateTime, nullable=True)
     
     __table_args__ = (
-        UniqueConstraint('workspace_id', 'tag_id', 'time_interval', name='uq_polling_tasks_workspace_tag_interval'),
-        Index('idx_polling_tasks_workspace_id', 'workspace_id'),
+        UniqueConstraint('tag_id', 'time_interval', name='uq_polling_tasks_tag_interval'),
         Index('idx_polling_tasks_tag_id', 'tag_id'),
         Index('idx_polling_tasks_next_polled', 'next_polled'),
         Index('idx_polling_tasks_is_active', 'is_active'),
     )
     
     # Relationships
-    workspace = relationship("Workspace", back_populates="polling_tasks")
     tag = relationship("Tag", back_populates="polling_tasks")
     
     def __repr__(self):
-        return f"<PollingTasks(id={self.id}, workspace_id={self.workspace_id}, tag_id={self.tag_id})>"
+        return f"<PollingTasks(id={self.id}, tag_id={self.tag_id})>"
 
 class SubscriptionTasks(PlantBase, BaseModel):
     """Subscription Tasks - Plant Database, Workspace-Scoped"""
@@ -524,14 +489,20 @@ class DataSource(PlantBase, BaseModel):
     plant_id = Column(Integer, nullable=False)
     connection_config = Column(JSON, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     
     __table_args__ = (
         Index('idx_data_sources_name', 'name'),
         Index('idx_data_sources_type_id', 'type_id'),
+        Index('idx_data_sources_plant_id', 'plant_id'),
         Index('idx_data_sources_is_active', 'is_active'),
     )
+    
+    # Relationships
+    data_source_type = relationship("DataSourceType", back_populates="data_sources")
+    tags = relationship("Tag", back_populates="data_source", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<DataSource(id={self.id}, name={self.name}, type_id={self.type_id}, plant_id={self.plant_id})>"
 
 class DataSourceType(PlantBase, BaseModel):
     """Data Source Types - Plant Database, Plant-wide"""
@@ -540,5 +511,94 @@ class DataSourceType(PlantBase, BaseModel):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    __table_args__ = (
+        Index('idx_data_source_types_name', 'name'),
+        Index('idx_data_source_types_is_active', 'is_active'),
+    )
+    
+    # Relationships
+    data_sources = relationship("DataSource", back_populates="data_source_type", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<DataSourceType(id={self.id}, name={self.name})>"
+
+
+# =============================================================================
+# HIERARCHY CONFIGURATION (Plant-wide, no workspace restriction)
+# =============================================================================
+
+class HierarchyConfig(PlantBase, BaseModel):
+    """Hierarchy Configuration - Plant Database Only"""
+    __tablename__ = 'hierarchy_config'
+    
+    label = Column(String, nullable=False, unique=True)
+    path = Column(String, nullable=False)
+    display_order = Column(Integer, nullable=False, default=0)
+    parent_label = Column(String, nullable=True)
+    display_name = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    icon = Column(String, nullable=True, default='file')
+    
+    __table_args__ = (
+        Index('idx_hierarchy_config_label', 'label'),
+        Index('idx_hierarchy_config_path', 'path'),
+        Index('idx_hierarchy_config_parent_label', 'parent_label'),
+        Index('idx_hierarchy_config_is_active', 'is_active'),
+        Index('idx_hierarchy_config_icon', 'icon'),
+    )
+    
+    def __repr__(self):
+        return f"<HierarchyConfig(label={self.label}, path={self.path}, display_order={self.display_order})>"
+    
+class CustomView(PlantBase, BaseModel):
+    """Custom View - Plant Database Only"""
+    __tablename__ = 'custom_views'
+    
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    is_favorite = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    tags = Column(JSON, nullable=True)  # Array of tags
+    filter_config = Column(JSON, nullable=False)  # The advanced filter configuration
+    results = Column(JSON, nullable=False)  # The actual nodes/relationships data
+    created_by = Column(Integer, nullable=False)  # User who created the view
+    
+    __table_args__ = (
+        Index('idx_custom_views_favorite', 'is_favorite'),
+        Index('idx_custom_views_created_by', 'created_by'),
+        Index('idx_custom_views_is_active', 'is_active'),
+    )
+    
+    def __repr__(self):
+        return f"<CustomView(id={self.id}, name={self.name})>"
+    
+    
+# =============================================================================
+# LAYOUT PERSISTENCE (Workspace-scoped)
+# =============================================================================
+
+class Layout(PlantBase, BaseModel):
+    """Persisted React Flow layouts per user/workspace/level - Plant Database, Workspace-Scoped"""
+    __tablename__ = "layouts"
+
+    user_id = Column(Integer, nullable=False)  # References users.id from central DB (no FK constraint)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=False)
+    level = Column(String(100), nullable=False)
+    layout_data = Column(JSON, nullable=False)
+    version = Column(String(10), nullable=True, default="1.0")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'workspace_id', 'level', name='uq_layout_user_workspace_level'),
+        Index('idx_layouts_lookup', 'user_id', 'workspace_id', 'level'),
+        Index('idx_layouts_workspace', 'workspace_id'),
+    )
+
+    # Relationships
+    workspace = relationship("Workspace", back_populates="layouts")
+
+    def __repr__(self):
+        return f"<Layout(id={self.id}, user_id={self.user_id}, workspace_id={self.workspace_id}, level={self.level})>"
+    
