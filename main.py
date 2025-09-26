@@ -55,6 +55,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://172.27.26.127:3000",
         "http://10.10.10.78:3039",  # Add your specific origins
+        "http://172.27.26.127:3039",
+        "http://172.27.88.85:8000",
+        "http://172.27.88.85:8080"
+        
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
