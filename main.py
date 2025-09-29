@@ -15,25 +15,6 @@ load_dotenv(".env", override=True)
 app = FastAPI()
 logger = setup_logger(__name__)
 
-# Custom CORS middleware for better file upload handling
-class CustomCORSMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Handle preflight requests
-        if request.method == "OPTIONS":
-            response = JSONResponse(content={"message": "OK"})
-        else:
-            response = await call_next(request)
-        
-        # Add CORS headers
-        response.headers["Access-Control-Allow-Origin"] = "http://localhost:3039"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "Accept, Accept-Language, Content-Language, Content-Type, Authorization, plant-id, X-Requested-With, Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
-        response.headers["Access-Control-Expose-Headers"] = "*"
-        response.headers["Access-Control-Max-Age"] = "600"
-        
-        return response
-
 # Custom exception handler to ensure all HTTP errors follow our response format
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -42,9 +23,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         status_code=exc.status_code,
         content=fail_response(message=exc.detail)
     )
-
-# Add custom CORS middleware first
-app.add_middleware(CustomCORSMiddleware)
 
 # Add standard CORS middleware as backup
 app.add_middleware(

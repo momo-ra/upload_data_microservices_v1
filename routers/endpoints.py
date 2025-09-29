@@ -91,38 +91,90 @@ async def get_upload_history(
 ):
     """Get upload history for a plant"""
     try:
-        # Query recent uploads from time_series table - using correct column structure
-        query = text("""
-            SELECT 
-                t.name as tag_name,
-                COUNT(*) as records_count,
-                MIN(ts.timestamp) as first_record,
-                MAX(ts.timestamp) as last_record,
-                ts.frequency
-            FROM time_series ts
-            JOIN tags t ON ts.tag_id = t.id
-            WHERE t.plant_id = :plant_id
-            GROUP BY t.name, ts.frequency
-            ORDER BY MAX(ts.timestamp) DESC
-            LIMIT 50
+        logger.info(f"🔍 Starting upload history query for Plant {plant_id}")
+        
+        # Test 1: Simple connection test
+        logger.info("🔍 Testing basic database connection...")
+        simple_query = text("SELECT 1 as test")
+        simple_result = await db.execute(simple_query)
+        simple_row = simple_result.fetchone()
+        logger.info(f"✅ Basic connection test passed: {simple_row[0]}")
+        
+        # Test 2: Check if tables exist
+        logger.info("🔍 Checking if tables exist...")
+        table_exists_query = text("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name IN ('tags', 'time_series')
         """)
+        tables_result = await db.execute(table_exists_query)
+        existing_tables = [row[0] for row in tables_result.fetchall()]
+        logger.info(f"📊 Existing tables: {existing_tables}")
         
-        result = await db.execute(query, {"plant_id": int(plant_id)})
+        if 'tags' not in existing_tables:
+            logger.warning("⚠️ Tags table does not exist")
+            return success_response(data={"history": []}, message="Tags table not found")
         
-        history = [
-            {
-                "tag_name": row[0],
-                "records_count": row[1],
-                "first_record": str(row[2]) if row[2] else None,
-                "last_record": str(row[3]) if row[3] else None,
-                "frequency": row[4]
-            }
-            for row in result.fetchall()
-        ]
+        if 'time_series' not in existing_tables:
+            logger.warning("⚠️ Time series table does not exist")
+            return success_response(data={"history": []}, message="Time series table not found")
         
-        return success_response(data={"history": history}, message="Upload history retrieved successfully")
+        # Test 3: Simple count without WHERE clause
+        logger.info("🔍 Testing simple count queries...")
+        try:
+            tags_count_query = text("SELECT COUNT(*) FROM tags")
+            tags_result = await db.execute(tags_count_query)
+            tags_count = tags_result.scalar()
+            logger.info(f"📊 Total tags count: {tags_count}")
+        except Exception as e:
+            logger.error(f"❌ Error counting tags: {e}")
+            return success_response(data={"history": []}, message="Error accessing tags table")
+        
+        try:
+            time_series_count_query = text("SELECT COUNT(*) FROM time_series")
+            time_series_result = await db.execute(time_series_count_query)
+            time_series_count = time_series_result.scalar()
+            logger.info(f"📊 Total time series count: {time_series_count}")
+        except Exception as e:
+            logger.error(f"❌ Error counting time series: {e}")
+            return success_response(data={"history": []}, message="Error accessing time series table")
+        
+        if tags_count == 0:
+            logger.warning("⚠️ No tags found")
+            return success_response(data={"history": []}, message="No tags found")
+        
+        if time_series_count == 0:
+            logger.warning("⚠️ No time series data found")
+            return success_response(data={"history": []}, message="No time series data found")
+        
+        # Test 4: Simple query without JOIN
+        logger.info("🔍 Testing simple tag query...")
+        try:
+            simple_tags_query = text("SELECT name FROM tags LIMIT 5")
+            simple_tags_result = await db.execute(simple_tags_query)
+            simple_tags = [row[0] for row in simple_tags_result.fetchall()]
+            logger.info(f"📊 Sample tag names: {simple_tags}")
+        except Exception as e:
+            logger.error(f"❌ Error querying tags: {e}")
+            return success_response(data={"history": []}, message="Error querying tags")
+        
+        # If we get here, return a simple response
+        logger.info("✅ All tests passed, returning simple response")
+        return success_response(
+            data={
+                "history": [],
+                "debug_info": {
+                    "tags_count": tags_count,
+                    "time_series_count": time_series_count,
+                    "sample_tags": simple_tags[:3] if simple_tags else []
+                }
+            }, 
+            message="Debug information retrieved successfully"
+        )
+        
     except Exception as e:
-        logger.error(f"Error fetching upload history: {e}")
+        logger.error(f"❌ Error in upload history: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/metrics/{tag_id}")
