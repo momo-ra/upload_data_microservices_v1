@@ -113,22 +113,87 @@ async def get_upload_history(
         result = await db.execute(query, {"plant_id": int(plant_id)})
         logger.info("🔍 Query executed successfully, processing results...")
         
-        history = [
-            {
-                "tag_name": row[0],
-                "records_count": row[1],
-                "first_record": str(row[2]) if row[2] else None,
-                "last_record": str(row[3]) if row[3] else None,
-                "frequency": row[4]
-            }
-            for row in result.fetchall()
-        ]
+        rows = result.fetchall()
+        logger.info(f"📊 Raw query returned {len(rows)} rows")
         
-        logger.info(f"✅ Retrieved {len(history)} history records")
-        return success_response(data={"history": history}, message="Upload history retrieved successfully")
+        history = []
+        for i, row in enumerate(rows):
+            try:
+                # Handle datetime serialization properly
+                first_record = None
+                last_record = None
+                
+                if row[2]:  # first_record
+                    if hasattr(row[2], 'isoformat'):
+                        first_record = row[2].isoformat()
+                    else:
+                        first_record = str(row[2])
+                
+                if row[3]:  # last_record
+                    if hasattr(row[3], 'isoformat'):
+                        last_record = row[3].isoformat()
+                    else:
+                        last_record = str(row[3])
+                
+                history_item = {
+                    "tag_name": str(row[0]) if row[0] else "",
+                    "records_count": int(row[1]) if row[1] else 0,
+                    "first_record": first_record,
+                    "last_record": last_record,
+                    "frequency": str(row[4]) if row[4] else ""
+                }
+                history.append(history_item)
+                if i < 3:  # Log first 3 items for debugging
+                    logger.info(f"📊 History item {i+1}: {history_item}")
+            except Exception as e:
+                logger.error(f"❌ Error processing row {i}: {e}")
+                logger.error(f"❌ Row data: {row}")
+                continue
+        
+        logger.info(f"✅ Processed {len(history)} history records successfully")
+        
+        # Create response data
+        response_data = {
+            "history": history,
+            "total_records": len(history),
+            "plant_id": plant_id
+        }
+        
+        logger.info(f"📤 Returning response with {len(history)} items")
+        return success_response(data=response_data, message="Upload history retrieved successfully")
         
     except Exception as e:
         logger.error(f"❌ Error fetching upload history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/uploads/history/test")
+async def test_upload_history_response():
+    """Test endpoint to verify response format"""
+    try:
+        test_data = {
+            "history": [
+                {
+                    "tag_name": "test_tag_1",
+                    "records_count": 100,
+                    "first_record": "2025-01-01T00:00:00",
+                    "last_record": "2025-01-01T23:59:59",
+                    "frequency": "minute"
+                },
+                {
+                    "tag_name": "test_tag_2", 
+                    "records_count": 200,
+                    "first_record": "2025-01-02T00:00:00",
+                    "last_record": "2025-01-02T23:59:59",
+                    "frequency": "hour"
+                }
+            ],
+            "total_records": 2,
+            "plant_id": "1"
+        }
+        
+        return success_response(data=test_data, message="Test response successful")
+    except Exception as e:
+        logger.error(f"❌ Error in test endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/metrics/{tag_id}")

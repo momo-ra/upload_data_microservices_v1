@@ -5,7 +5,7 @@ from utils.log import setup_logger
 logger = setup_logger(__name__)
 
 # Load environment variables from .env file
-load_dotenv('.env', override=True)
+load_dotenv('./../.env', override=True)
 
 class Settings:
     # Central database settings

@@ -10,7 +10,7 @@ from database import init_db
 from utils.log import setup_logger
 
 # Load environment variables
-load_dotenv(".env", override=True)
+load_dotenv("./../.env", override=True)
 
 app = FastAPI()
 logger = setup_logger(__name__)

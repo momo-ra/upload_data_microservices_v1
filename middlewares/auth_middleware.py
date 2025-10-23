@@ -9,7 +9,7 @@ from utils.response_model import error_response
 
 logger = setup_logger(__name__)
 
-dotenv.load_dotenv('.env', override=True)
+dotenv.load_dotenv('./../.env', override=True)
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM")
